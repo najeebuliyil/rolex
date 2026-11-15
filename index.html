@@ -141,6 +141,7 @@ th{background:#efe1d2;color:#4b2e20}
 .paymentbox h4{color:#4b2e20!important}
 </style>
 <script defer src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 </head>
 <body>
 <div id="loginGate">
@@ -416,6 +417,22 @@ html,body{margin:0;padding:0;background:#fff;color:#172b46;font-family:Arial,Hel
 .detailsgrid{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:1.5mm 2mm;font-size:14pt;line-height:1.2;margin-top:.8mm}.detailsgrid b{font-size:8pt;color:#64748b;text-transform:uppercase;display:block;margin-bottom:.2mm}.detailsgrid .wide{grid-column:span 2}.repairtext{margin-top:.5mm;padding:2mm 2.2mm;background:#f4f7fb;border: .3mm solid #c49a3a;border-radius:1mm;font-size:17pt;font-weight:800;line-height:1.2;min-height:10mm;color:#08264d}.small{font-size:8pt;color:#64748b}
 .bottom{display:grid;grid-template-columns:1fr 1fr 22mm;gap:1mm;margin-top:1mm;align-items:stretch}.payment,.totals,.qrbox{border:.3mm solid #d7dee8;border-radius:1mm;padding:1mm 1.2mm;font-size:11pt;line-height:1.2}.payment .row,.totals .row{display:flex;justify-content:space-between;gap:2mm}.payment .row span:first-child,.totals .row span:first-child{color:#64748b}.payment .grand,.totals .grand{margin-top:1mm;padding-top:1mm;border-top:.2mm solid #d7dee8;font-weight:800;color:#08264d}.totals{background:#f7f9fc;border-color:#08264d}.totals .grand{font-size:12pt}.balance{margin-top:1mm;padding:1mm;text-align:center;border-radius:1mm;background:${bal>0?"#fff4e5":"#ecfdf3"};color:${bal>0?"#9a5b00":"#087443"};font-weight:900;font-size:10pt}.qrbox{text-align:center;padding:1.2mm}.qrbox img{width:20mm;height:20mm;object-fit:contain;display:block;margin:0 auto .5mm}.qrnote{font-size:8pt;color:#64748b}
 .footer{margin-top:2mm;border-top:.5mm solid #08264d;padding-top:1.5mm;display:flex;justify-content:space-between;gap:3mm;font-size:9pt;color:#26384f;line-height:1.3}.thanks{font-weight:800;color:#08264d;font-size:10pt}.contactline{font-weight:900;color:#08264d;font-size:10pt;margin-top:.7mm}.sign{text-align:right}
+/* Compact typography for service / watch repair bills */
+.brand h1{font-size:20pt!important}
+.brand .sub{font-size:8pt!important}
+.address,.address.contactnums{font-size:8pt!important}
+.invoicebar .billno{font-size:11pt!important}
+.customergrid{font-size:9pt!important}
+.sectiontitle{font-size:8pt!important}
+.detailsgrid{font-size:9pt!important}
+.repairtext{font-size:10pt!important;line-height:1.15!important;min-height:7mm!important;padding:1.2mm 1.5mm!important}
+.box h4{font-size:9pt!important}
+.payment,.totals,.qrbox{font-size:8pt!important}
+.totals .grand{font-size:9pt!important}
+.balance{font-size:8pt!important}
+.footer{font-size:7.5pt!important}
+.thanks,.contactline{font-size:8pt!important}
+
 @page{margin:2mm;size:auto}
 @media print{html,body{margin:0!important;padding:0!important;width:100%!important;-webkit-print-color-adjust:exact;print-color-adjust:exact}.screen{display:none!important}.bill{width:100%!important;max-width:none!important;margin:0!important;padding:0.5mm!important;box-sizing:border-box!important;break-inside:avoid;page-break-inside:avoid}.header,.customer,.box,.bottom{break-inside:avoid;page-break-inside:avoid}}
 </style></head><body>
@@ -469,44 +486,76 @@ function parseStockCSV(text){
 }
 function importStockCSV(input){
   const file=input.files&&input.files[0];if(!file)return;
-  if(!file.name.toLowerCase().endsWith(".csv")){alert("Please choose a .csv file.");input.value="";return;}
+  const ext=(file.name.split('.').pop()||'').toLowerCase();
+  if(!['csv','txt','tsv','xlsx','xls'].includes(ext)){alert('Choose an Excel (.xlsx/.xls) or CSV (.csv/.tsv) stock file.');input.value='';return;}
+  const finish=(rawRows)=>{
+    try{
+      if(!rawRows||rawRows.length<2)throw new Error('The file must contain a header row and at least one product row.');
+      const norm=h=>String(h??'').replace(/^\uFEFF/,'').trim().toLowerCase().replace(/[\s\-./]+/g,'_').replace(/[^a-z0-9_]/g,'');
+      const aliases={
+        barcode:['barcode','bar_code','item_code','sku','product_code'],
+        name:['name','product_name','product','item','item_name','watch_name','description'],
+        brand:['brand','company','make'],model:['model','model_no','model_number'],
+        serial:['serial','serial_no','serial_number'],
+        buy:['purchase_price','purchase_rate','buy','buy_price','cost','cost_price','rate'],
+        mrp:['mrp','marked_price','maximum_retail_price'],
+        sell:['sale_price','selling_price','sell','retail_price'],
+        stock:['stock','qty','quantity','opening_stock','opening_qty'],
+        min:['minimum_stock','min_stock','min','reorder_level']
+      };
+      const headers=rawRows[0].map(norm);
+      const col={};for(const [key,names] of Object.entries(aliases)){col[key]=headers.findIndex(h=>names.includes(h));}
+      if(col.name<0)throw new Error('Product name column not found. Use Product Name or name in the first row.');
+      const val=(row,key,def='')=>col[key]>=0?String(row[col[key]]??'').trim():def;
+      const num=(row,key,def=0)=>{const raw=val(row,key,'');if(raw==='')return def;const n=Number(String(raw).replace(/[₹,]/g,'').trim());return Number.isFinite(n)&&n>=0?n:NaN;};
+      const existing=new Set(products.map(p=>String(p.barcode||'').trim()).filter(Boolean));
+      const seen=new Set(existing),accepted=[],skipped=[],errors=[];
+      rawRows.slice(1).forEach((row,i)=>{
+        const rowNo=i+2;if(!row||row.every(v=>String(v??'').trim()===''))return;
+        const name=val(row,'name'),barcode=val(row,'barcode');
+        if(!name){errors.push('Row '+rowNo+': product name is required.');return;}
+        if(barcode&&seen.has(barcode)){skipped.push('Row '+rowNo+': duplicate barcode '+barcode);return;}
+        const buy=num(row,'buy'),mrp=num(row,'mrp'),sell=num(row,'sell'),stock=num(row,'stock'),min=num(row,'min',1);
+        if([buy,mrp,sell,stock,min].some(v=>!Number.isFinite(v))){errors.push('Row '+rowNo+': price, stock and minimum stock must be non-negative numbers.');return;}
+        accepted.push({id:'bulk-'+Date.now().toString(36)+'-'+rowNo+'-'+Math.random().toString(36).slice(2,7),barcode:barcode||'',name,brand:val(row,'brand'),model:val(row,'model'),serial:val(row,'serial'),buy,mrp,sell,stock,min});
+        if(barcode)seen.add(barcode);
+      });
+      if(errors.length)throw new Error('Validation failed. Nothing was imported.\n\n'+errors.slice(0,15).join('\n')+(errors.length>15?'\n…and more errors.':''));
+      if(!accepted.length)throw new Error('No new products found.'+(skipped.length?'\nSkipped duplicates: '+skipped.length:''));
+      if(!confirm('Import '+accepted.length+' new stock item(s)?'+(skipped.length?'\n'+skipped.length+' duplicate barcode row(s) will be skipped.':'')+'\n\nExisting products will not be overwritten.'))return;
+      let n=Number(localStorage.getItem('rolex_times_barcode_no')||0);
+      accepted.forEach(p=>{if(!p.barcode){do{n++;p.barcode='RTB'+String(n).padStart(9,'0')}while(seen.has(p.barcode));seen.add(p.barcode);}});
+      localStorage.setItem('rolex_times_barcode_no',String(n));
+      products.push(...accepted);saveDB();renderStock();
+      alert('Bulk upload successful: '+accepted.length+' product(s) imported.'+(skipped.length?'\n'+skipped.length+' duplicate barcode row(s) skipped.':''));
+    }catch(e){alert('Stock upload failed: '+(e.message||e));}
+    finally{input.value='';}
+  };
   const reader=new FileReader();
-  reader.onerror=()=>{alert("Could not read the CSV file.");input.value="";};
+  reader.onerror=()=>{alert('Could not read the selected file.');input.value='';};
   reader.onload=()=>{
     try{
-      const rows=parseStockCSV(reader.result);
-      const allowed=["barcode","name","product_name","product","brand","model","serial","purchase_price","buy","mrp","sale_price","sell","stock","minimum_stock","min"];
-      const existingBarcodes=new Set(products.map(p=>String(p.barcode||"").trim()).filter(Boolean));
-      const seen=new Set(existingBarcodes);let accepted=[],skipped=[],errors=[];
-      rows.forEach(r=>{
-        const name=r.name||r.product_name||r.product, barcode=r.barcode||"";
-        if(!name){errors.push("Row "+r.__row+": product name is required.");return;}
-        const unknown=Object.keys(r).filter(k=>k!=="__row"&&!allowed.includes(k));
-        if(unknown.length&&r.__row===2)errors.push("Unrecognized column(s): "+unknown.join(", "));
-        if(barcode&&seen.has(barcode)){skipped.push("Row "+r.__row+": duplicate barcode "+barcode);return;}
-        const num=(keys,def=0)=>{const k=keys.find(k=>r[k]!==undefined&&r[k]!=="");if(!k)return def;const v=Number(r[k]);return Number.isFinite(v)&&v>=0?v:NaN;};
-        const buy=num(["purchase_price","buy"]),mrp=num(["mrp"]),sell=num(["sale_price","sell"]),stock=num(["stock"]),min=num(["minimum_stock","min"],1);
-        if([buy,mrp,sell,stock,min].some(v=>!Number.isFinite(v))){errors.push("Row "+r.__row+": prices, stock and minimum stock must be non-negative numbers.");return;}
-        let finalBarcode=barcode;
-        if(!finalBarcode){
-          let n=Number(localStorage.getItem("rolex_times_barcode_no")||0);
-          do{n++;finalBarcode="RTB"+String(n).padStart(9,"0");}while(seen.has(finalBarcode));
-          localStorage.setItem("rolex_times_barcode_no",String(n));
-        }
-        accepted.push({id:"csv-"+Date.now()+"-"+r.__row,barcode:finalBarcode,name,brand:r.brand||"",model:r.model||"",serial:r.serial||"",buy,mrp,sell,stock,min});
-        seen.add(finalBarcode);
-      });
-      if(errors.length){alert("CSV validation found errors. Nothing was imported.\n\n"+errors.slice(0,12).join("\n")+(errors.length>12?"\n…and more errors.":""));return;}
-      if(!accepted.length){alert("No new products to import.\n"+skipped.join("\n"));return;}
-      if(!confirm("Ready to import "+accepted.length+" new product(s)."+(skipped.length?"\nSkipped "+skipped.length+" duplicate barcode row(s).":"")+"\n\nNew items only; existing products will not be overwritten. Continue?"))return;
-      products.push(...accepted);saveDB();renderStock();
-      alert("Imported "+accepted.length+" product(s)."+(skipped.length?"\nSkipped duplicates: "+skipped.length:""));
-    }catch(e){alert("CSV import failed: "+(e.message||e));}
-    finally{input.value="";}
+      if(ext==='xlsx'||ext==='xls'){
+        if(!window.XLSX)throw new Error('Excel reader could not load. Connect to the internet and reload the app, or save the sheet as CSV and upload again.');
+        const wb=XLSX.read(reader.result,{type:'array'});const ws=wb.Sheets[wb.SheetNames[0]];
+        finish(XLSX.utils.sheet_to_json(ws,{header:1,defval:'',raw:false}));
+      }else{
+        let text=String(reader.result||'').replace(/^\uFEFF/,'');
+        const first=text.split(/\r?\n/,1)[0]||'';const counts={',':(first.match(/,/g)||[]).length,';':(first.match(/;/g)||[]).length,'\t':(first.match(/\t/g)||[]).length};
+        const delimiter=Object.keys(counts).sort((a,b)=>counts[b]-counts[a])[0];
+        if(delimiter==='\t'){
+          const rows=text.split(/\r?\n/).filter(x=>x.trim()).map(line=>line.split('\t'));
+          finish(rows);
+        }else if(delimiter===';'){
+          // Reuse the CSV parser after converting semicolon separators outside quoted fields.
+          let out='',quoted=false;for(let i=0;i<text.length;i++){const c=text[i];if(c==='"'){if(quoted&&text[i+1]==='"'){out+='""';i++;continue;}quoted=!quoted;out+=c;}else out+=(c===';'&&!quoted?',':c);}finish(parseStockCSV(out));
+        }else finish(parseStockCSV(text));
+      }
+    }catch(e){alert('Stock upload failed: '+(e.message||e));input.value='';}
   };
-  reader.readAsText(file,"UTF-8");
+  if(ext==='xlsx'||ext==='xls')reader.readAsArrayBuffer(file);else reader.readAsText(file,'UTF-8');
 }
-function renderStock(){let q=($("stockSearch")?.value||"").toLowerCase();let arr=products.filter(p=>(p.barcode+" "+p.name+" "+p.brand+" "+p.model+" "+p.serial).toLowerCase().includes(q));$("page").innerHTML=`<div class="panel"><div class="panelhead"><h3>Stock / Products</h3><div class="toolbar"><input id="stockSearch" class="search" placeholder="Search barcode, product, model..." value="${esc(q)}"><button class="btn" onclick="openProductForm()">+ Add Product</button><button class="btn gray" onclick="downloadStockCSVTemplate()">⬇ CSV Template</button><button class="btn gray" onclick="document.getElementById('stockCSVFile').click()">⬆ Upload CSV</button><input id="stockCSVFile" type="file" accept=".csv,text/csv" style="display:none" onchange="importStockCSV(this)"><button class="btn gray" onclick="printAllBarcodes()">🖨 Print All Barcodes</button></div></div><p class="muted mini">USB barcode scanners work like a keyboard. Scan into the Sales barcode box and press Enter.</p><div class="tablewrap"><table><thead><tr><th>Barcode</th><th>Product</th><th>Purchase</th><th>MRP</th><th>Sale Price</th><th>Stock</th><th>Value</th><th>Action</th></tr></thead><tbody>${arr.map(p=>`<tr><td><b>${esc(p.barcode)}</b><div style="width:130px">${code128SVG(p.barcode)}</div></td><td>${esc(p.name)}<br><small>${esc(p.brand)} ${esc(p.model)} ${p.serial?"• "+esc(p.serial):""}</small></td><td>${money(p.buy)}</td><td>${money(p.mrp||0)}</td><td>${money(p.sell)}</td><td class="${Number(p.stock)<=Number(p.min)?'stocklow':'stockok'}">${p.stock}</td><td>${money(Number(p.stock)*Number(p.buy))}</td><td class="item-actions"><button class="btn gray small" onclick='openProductForm(${JSON.stringify(p).replace(/'/g,"&#39;")})'>Edit</button><button class="btn small" onclick="printProductLabel('${p.id}')">Label</button><button class="btn red small" onclick="deleteProduct('${p.id}')">🗑 Delete</button></td></tr>`).join("")}</tbody></table></div></div>`;$("stockSearch").oninput=renderStock}
+function renderStock(){let q=($("stockSearch")?.value||"").toLowerCase();let arr=products.filter(p=>(p.barcode+" "+p.name+" "+p.brand+" "+p.model+" "+p.serial).toLowerCase().includes(q));$("page").innerHTML=`<div class="panel"><div class="panelhead"><h3>Stock / Products</h3><div class="toolbar"><input id="stockSearch" class="search" placeholder="Search barcode, product, model..." value="${esc(q)}"><button class="btn" onclick="openProductForm()">+ Add Product</button><button class="btn gray" onclick="downloadStockCSVTemplate()">⬇ CSV Template</button><button class="btn gray" onclick="document.getElementById('stockCSVFile').click()">⬆ Bulk Upload (Excel / CSV)</button><input id="stockCSVFile" type="file" accept=".csv,.tsv,.txt,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" style="display:none" onchange="importStockCSV(this)"><button class="btn gray" onclick="printAllBarcodes()">🖨 Print All Barcodes</button></div></div><p class="muted mini">Bulk upload supports Excel (.xlsx/.xls) and CSV (.csv/.tsv). Use the CSV Template for the correct column headings. USB barcode scanners work like a keyboard.</p><div class="tablewrap"><table><thead><tr><th>Barcode</th><th>Product</th><th>Purchase</th><th>MRP</th><th>Sale Price</th><th>Stock</th><th>Value</th><th>Action</th></tr></thead><tbody>${arr.map(p=>`<tr><td><b>${esc(p.barcode)}</b><div style="width:130px">${code128SVG(p.barcode)}</div></td><td>${esc(p.name)}<br><small>${esc(p.brand)} ${esc(p.model)} ${p.serial?"• "+esc(p.serial):""}</small></td><td>${money(p.buy)}</td><td>${money(p.mrp||0)}</td><td>${money(p.sell)}</td><td class="${Number(p.stock)<=Number(p.min)?'stocklow':'stockok'}">${p.stock}</td><td>${money(Number(p.stock)*Number(p.buy))}</td><td class="item-actions"><button class="btn gray small" onclick='openProductForm(${JSON.stringify(p).replace(/'/g,"&#39;")})'>Edit</button><button class="btn small" onclick="printProductLabel('${p.id}')">Label</button><button class="btn red small" onclick="deleteProduct('${p.id}')">🗑 Delete</button></td></tr>`).join("")}</tbody></table></div></div>`;$("stockSearch").oninput=renderStock}
 function findProduct(v){v=String(v||"").trim().toLowerCase();return products.find(p=>String(p.barcode).toLowerCase()===v)||products.find(p=>(p.name+" "+p.brand+" "+p.model).toLowerCase().includes(v))}
 function printCurrentProductBarcode(){let id=editProductId;if(!id){let temp={name:$("pName")?.value||"Product",barcode:$("pBarcode")?.value.trim()};if(!temp.barcode){alert("Enter or generate a barcode first.");return}printBarcodeLabels([temp]);return}printProductLabel(id)}
 function printBarcodeLabels(items){let w=window.open("","_blank","width=700,height=900");if(!w){alert("Please allow pop-ups for barcode printing.");return}w.document.write(`<html><head><meta charset="utf-8"><title>ROLEX TIMES Barcode Labels</title><style>@page{size:A4;margin:8mm}body{font-family:Arial}.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:6mm}.label{border:.3mm solid #bbb;padding:4mm;text-align:center;min-height:32mm;break-inside:avoid}.name{font-weight:bold;font-size:10pt;margin-bottom:2mm}.price{font-size:9pt;margin-top:1mm}.bar svg{width:100%;height:15mm}</style></head><body><div class="grid">${items.map(p=>`<div class="label"><div class="name">${esc(p.name||"Product")}</div><div class="bar">${code128SVG(p.barcode)}</div><div>${esc(p.barcode)}</div>${p.sell?`<div class="price">${money(p.sell)}</div>`:""}</div>`).join("")}</div></body></html>`);w.document.close();w.onload=()=>setTimeout(()=>w.print(),300)}
@@ -589,46 +638,34 @@ saleCart.forEach(x=>{if(x.manual)return;const p=products.find(p=>p.id===x.produc
 for(const x of saleCart){if(x.manual)continue;let p=products.find(p=>p.id===x.productId);if(!p||Number(p.stock)<x.qty){alert("Stock changed. Please review the cart.");return}}let s={id:Date.now().toString(),bill:nextSale(),date:isoToday(),dateDisplay:today(),customer:$("saleCustomer").value.trim()||"Walk-in Customer",mobile:$("saleMobile").value.trim(),custAddress:$("saleAddress").value.trim(),items:saleCart.map(x=>({...x})),total,paid,cash,upi,card,paymentMode:[cash>0?"Cash":"",upi>0?"UPI":"",card>0?"Card":""].filter(Boolean).join(" + ")||"Credit"};saleCart.forEach(x=>{if(x.manual)return;let p=products.find(p=>p.id===x.productId);if(p)p.stock-=x.qty});sales.push(s);syncCustomerDatabaseFromHistory();saveDB();alert("Sale saved: "+s.bill);printSale(s.id);clearSaleCart();$("saleCustomer").value="";$("saleMobile").value="";$("saleAddress").value="";renderSales()}
 function renderSalesHistory(){let q=prompt("Search sales by bill, customer or mobile (leave blank for all):","");if(q===null)return;let a=sales.slice().reverse().filter(s=>!q||JSON.stringify(s).toLowerCase().includes(q.toLowerCase()));$("page").innerHTML=`<div class="panel"><div class="panelhead"><h3>Sales History</h3><button class="btn" onclick="showPage('sales')">+ New Sale</button></div><div class="tablewrap"><table><thead><tr><th>Bill</th><th>Date</th><th>Customer</th><th>Total</th><th>Paid</th><th>Balance</th><th>Action</th></tr></thead><tbody>${a.map(s=>saleRow(s)).join("")||'<tr><td colspan="7">No sales found.</td></tr>'}</tbody></table></div></div>`}
 function printSale(id){
-  let s=sales.find(x=>x.id===id);
-  if(!s)return;
-  let w=window.open("","_blank","width=1100,height=700");
+  let s=sales.find(x=>x.id===id); if(!s)return;
+  let w=window.open("","_blank","width=1000,height=850");
   if(!w){alert("Please allow pop-ups for this app.");return}
-  let bal=Number(s.total)-Number(s.paid);
-  let subtotal=s.items.reduce((a,x)=>a+Number(x.mrp||0)*Number(x.qty||0),0);
-  let totalDiscount=s.items.reduce((a,x)=>a+discountAmount(x),0);
-  let saleLabel=s.saleType==="Exchange"?"EXCHANGE BILL":(s.status==="Returned"?"RETURN BILL":"SALES VOUCHER");
-  let statusText=s.status||"Completed";
-  let customerAddress=s.custAddress||"";
+  const bal=Number(s.total)-Number(s.paid);
+  const subtotal=(s.items||[]).reduce((a,x)=>a+Number(x.mrp||0)*Number(x.qty||0),0);
+  const totalDiscount=(s.items||[]).reduce((a,x)=>a+discountAmount(x),0);
+  const saleLabel=s.saleType==="Exchange"?"EXCHANGE BILL":(s.status==="Returned"?"RETURN BILL":"BILL OF SUPPLY");
+  const customerAddress=s.custAddress||"";
+  const qrImage='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAPoAAAD6AQMAAACyIsh+AAAABlBMVEX///8AAABVwtN+AAAACXBIWXMAAA7EAAAOxAGVKw4bAAABwElEQVRoge2Zu5HDMAxEoVGgUCWoFJVml6ZSVAJDBRrhsFiQ/tzdODeIxEPyKdnB3yKf7KZuJY565+/EaztmAfxmLtMhwyWKDzYeg+9ABVbVfS4ynUNo50oeo+qVEJj0lEHxturegf8BPAG46WYXJSFQI2vEhREB/A695EDkagMuU1LvBriDvSfzLweezQGEVpG/LTPgSu6zapNutZqlx3S6smmAsPnwmiVGrNviDnYOlzw8Kj2A3LzbDYr7VZUt6Ab9A+lABaDcLu5zl+gj9MYzQi8HgDMNF4y9nQ+DMld3wAFzKZy87TEXsmK/0qMiZSUB0A0isiatLmap2zKSeDdIl+tAAD4vqKegyN5W1cYYJ5IAIQySDlOvhRrHz3ruQK1ZYg5lxV2jLdpcSVgt7ikARpYS8EVNONj4EnodYHEXbLQie8MA+HsHGoDVDVzsbKEXBa0qmQKoxo0WlMJ7iW7waTDPDtwoGor7oM18zuKXWQDXao4xioP54kJ5Srp3oAErd8X8c4Hjg9e0x7yZD6AtptNUx80OvAGcN2NBgba5dkVZAEYWd+aRnLkr7sAL0HJ1u9gW66I9B0kHGvDJfgDHd+PmghVpCAAAAABJRU5ErkJggg==';
   w.document.write(`<html><head><meta charset="utf-8"><title>${esc(s.bill)} - ROLEX TIMES</title><style>
-@page{size:A5 landscape;margin:3mm}
-*{box-sizing:border-box}
-html,body{margin:0;padding:0;background:#fff;color:#172b46;font-family:Arial,Helvetica,sans-serif}
-.screen{display:flex;gap:7px;justify-content:center;padding:8px;background:#eef2f7;flex-wrap:wrap}
-.screen button{padding:8px 13px;border:0;border-radius:6px;background:#08264d;color:#fff;font-weight:700;cursor:pointer}.screen button:first-child{background:#16a765}
-@media print{.screen{display:none}}
-.bill{box-sizing:border-box;width:100%;max-width:204mm;min-height:0;height:auto;margin:0 auto;padding:1mm;overflow:visible;background:#fff}
-.header{border:.7mm solid #c49a3a;border-radius:1.8mm;padding:2mm 2.5mm;display:flex;align-items:center;gap:3mm;min-height:20mm;background:#fff;color:#172b46}
-.logo{width:17mm;height:17mm;object-fit:contain;flex:0 0 17mm}.brand{flex:1;min-width:0}.brand h1{margin:0;color:#08264d;font:700 30pt Georgia,serif;line-height:1.02}.brand .sub{margin-top:.5mm;font-size:12pt;font-weight:900;letter-spacing:.2px;color:#172b46}.address{margin-top:.5mm;font-size:12pt;color:#172b46;line-height:1.15;font-weight:800}.address.contactnums{display:block;font-size:12pt;color:#8a6410;font-weight:900;margin-top:.3mm;line-height:1.15}.badge{display:inline-block;margin-top:1mm;background:#c49a3a;color:#08264d;padding:1mm 2mm;border-radius:1mm;font-size:9pt;font-weight:900;letter-spacing:.3px}
-.invoicebar{width:63mm;flex:0 0 63mm;border-left:.4mm solid #c49a3a;padding-left:3mm;display:grid;grid-template-columns:1fr 1fr;gap:3mm;color:#172b46}.invoicebar .label{font-size:9pt;color:#52657c;text-transform:uppercase;font-weight:700}.invoicebar .billno{font-size:14pt;font-weight:900;color:#f2c766}.invoicebar .date{font-size:9pt;line-height:1.4;text-align:right;color:#172b46}
-.customer{margin-top:1mm;border:.3mm solid #d7dee8;border-radius:1mm;padding:1.2mm 1.5mm}.customergrid{display:grid;grid-template-columns:1.15fr .75fr 1.6fr;gap:1mm 2mm;font-size:14pt;line-height:1.2}.sectiontitle{font-size:11pt;color:#08264d;font-weight:900;text-transform:uppercase;letter-spacing:.6px;margin-bottom:1mm;border-bottom:.3mm solid #c49a3a;padding-bottom:.6mm}.customergrid b{font-size:8pt;color:#64748b;text-transform:uppercase;display:block;margin-bottom:.2mm}.customergrid .wide{grid-column:auto}
-.box{border:.3mm solid #d7dee8;border-radius:1mm;padding:1.2mm 1.5mm;margin-top:1mm}.box h4{margin:0;color:#08264d;font-size:12pt;text-transform:uppercase;letter-spacing:.2px}
-table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:15pt;margin-top:1mm;border: .35mm solid #cbd5e1}th{background:#f1f3f5;color:#172b46;padding:2mm 1mm;text-align:left;font-size:11pt;text-transform:uppercase;letter-spacing:.1px;border-bottom:.5mm solid #c49a3a}td{padding:2.2mm 1mm;border-bottom:.25mm solid #d5dde8;vertical-align:top;line-height:1.2;word-wrap:break-word;font-size:15pt}td:first-child b{font-size:16pt;font-weight:900;color:#08264d}tbody tr:nth-child(even){background:#f4f7fb}tbody tr:last-child td{border-bottom:0}th:nth-child(1),td:nth-child(1){width:50%}th:nth-child(2),td:nth-child(2){width:8%;text-align:center}th:nth-child(3),td:nth-child(3){width:14%;text-align:right}th:nth-child(4),td:nth-child(4){width:14%;text-align:right}th:nth-child(5),td:nth-child(5){width:14%;text-align:right}.small{font-size:10pt;color:#52657c}
-.bottom{display:grid;grid-template-columns:1fr 1fr 22mm;gap:1mm;margin-top:1mm;align-items:stretch}.payment,.totals,.qrbox{border:.3mm solid #d7dee8;border-radius:1mm;padding:1mm 1.2mm;font-size:11pt;line-height:1.2}.payment .row,.totals .row{display:flex;justify-content:space-between;gap:2mm}.payment .row span:first-child,.totals .row span:first-child{color:#64748b}.payment .grand,.totals .grand{margin-top:1mm;padding-top:1mm;border-top:.2mm solid #d7dee8;font-weight:800;color:#08264d}.totals{background:#f7f9fc;border-color:#08264d}.totals .grand{font-size:12pt}.balance{margin-top:1mm;padding:1mm;text-align:center;border-radius:1mm;background:${bal>0?"#fff4e5":"#ecfdf3"};color:${bal>0?"#9a5b00":"#087443"};font-weight:900;font-size:10pt}.qrbox{text-align:center;padding:1.2mm}.qrbox img{width:20mm;height:20mm;object-fit:contain;display:block;margin:0 auto .5mm}.qrnote{font-size:8pt;color:#64748b}
-.exchange{margin-top:1.5mm;border:.3mm solid #d7dee8;border-radius:1.5mm;padding:1.2mm 2mm;font-size:7pt}.footer{margin-top:2mm;border-top:.5mm solid #08264d;padding-top:1.5mm;display:flex;justify-content:space-between;gap:3mm;font-size:9pt;color:#26384f;line-height:1.3}.thanks{font-weight:800;color:#08264d;font-size:10pt}.contactline{font-weight:900;color:#08264d;font-size:10pt;margin-top:.7mm}.sign{text-align:right}
-@page{margin:2mm;size:auto}
-@media print{html,body{margin:0!important;padding:0!important;width:100%!important;-webkit-print-color-adjust:exact;print-color-adjust:exact}.screen{display:none!important}.bill{width:100%!important;max-width:none!important;margin:0!important;padding:0.5mm!important;box-sizing:border-box!important;break-inside:avoid;page-break-inside:avoid}.header,.customer,.box,.bottom{break-inside:avoid;page-break-inside:avoid}}
+@page{size:A4 portrait;margin:8mm}*{box-sizing:border-box}html,body{margin:0;padding:0;background:#fff;color:#111;font-family:Arial,Helvetica,sans-serif}
+.screen{display:flex;gap:8px;justify-content:center;padding:10px;background:#eee}.screen button{padding:8px 14px;border:0;background:#24518a;color:#fff;border-radius:4px;font-weight:bold;cursor:pointer}.screen button:first-child{background:#16834b}
+.bill{width:194mm;min-height:275mm;margin:0 auto;padding:0;background:#fff;font-size:10pt;color:#111}
+.caption{font-size:10pt;font-weight:bold;margin-bottom:2mm}.frame{border:1px solid #333;width:100%}
+.head{display:grid;grid-template-columns:38mm 1fr;min-height:25mm;border-bottom:1px solid #333;align-items:center}.logo{width:28mm;height:21mm;object-fit:contain;margin:2mm 4mm}.brand{text-align:center;padding:2mm}.brand h1{font-size:18pt;color:#43852a;margin:0 0 1mm;font-weight:800}.brand .address{font-size:9pt;margin:1mm 0}.brand .contact{font-size:9pt;font-weight:bold;margin-top:1mm}.brand .gst{font-size:9pt;margin-top:1mm}
+.meta{display:grid;grid-template-columns:1fr 1fr;border-bottom:1px solid #333;min-height:16mm}.billto{padding:2mm 2.5mm;border-right:1px solid #333;font-size:10pt;line-height:1.35}.billto strong{display:block;font-size:10pt}.invmeta{display:grid;grid-template-columns:1fr 1fr;text-align:center;align-items:center;font-size:9pt}.invmeta b{display:block;font-size:10pt;margin-bottom:1mm}
+table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:9pt}th,td{border:1px solid #555;padding:2mm 1.5mm}th{background:#c8d8b8;text-align:center;font-size:9pt;font-weight:bold}td{vertical-align:middle}td:nth-child(2),td:nth-child(3),td:nth-child(4),td:nth-child(5){text-align:right}th:nth-child(1){width:30%}th:nth-child(2){width:14%}th:nth-child(3){width:16%}th:nth-child(4){width:18%}th:nth-child(5){width:22%}.itemname{font-weight:600}.subrow td{font-weight:bold}.totalrow td{background:#c8d8b8;font-weight:bold}.received td{font-weight:bold}
+.footgrid{display:grid;grid-template-columns:1fr 1fr 27mm 1fr;min-height:31mm}.footgrid>div{padding:2mm;border-right:1px solid #555;font-size:8.5pt;line-height:1.4}.footgrid>div:last-child{border-right:0}.footgrid h4{font-size:9pt;margin:0 0 1mm}.bankline{overflow-wrap:anywhere}.qr{text-align:center;display:flex;flex-direction:column;justify-content:center;align-items:center}.qr img{width:19mm;height:19mm;object-fit:contain}.sign{display:flex;flex-direction:column;justify-content:flex-end;text-align:center;padding-bottom:4mm!important}.sign strong{margin-top:2mm}.terms{white-space:normal}
+@media print{.screen{display:none!important}html,body{width:100%;margin:0!important;padding:0!important;-webkit-print-color-adjust:exact;print-color-adjust:exact}.bill{width:100%;margin:0;min-height:0}.frame,.meta,.head,table,.footgrid{break-inside:avoid;page-break-inside:avoid}}
 </style></head><body>
 <div class="screen"><button onclick="window.opener&&window.opener.editSale('${s.id}');window.close()">✏️ Edit Bill</button><button onclick="window.opener&&window.opener.whatsappSale('${s.id}')">📲 WhatsApp</button><button onclick="window.print()">🖨 Print / Save PDF</button></div>
-<div class="bill">
-  <div class="header"><img class="logo" src="${LOGO}"><div class="brand"><h1>ROLEX TIMES</h1><div class="sub">WATCHES • SALES • SERVICE</div><div class="address">${esc(settings.address||"Ground floor, Unit 3, Unity Complex, IRITTY")}</div><div class="address contactnums">Shop Mobile: 9747504278 &nbsp; | &nbsp; Shop Phone: 04902085810</div><span class="badge">${esc(saleLabel)}</span></div><div class="invoicebar"><div><div class="label">Bill No.</div><div class="billno">${esc(s.bill)}</div></div><div class="date"><div><b>Date</b><br>${esc(s.dateDisplay||s.date)}</div><div><b>Status</b> ${esc(statusText)}</div></div></div></div>
-  <div class="customer"><div class="sectiontitle">Customer Details</div><div class="customergrid"><div><b>Name</b>${esc(s.customer||"Walk-in Customer")}</div><div><b>Mobile</b>${esc(s.mobile||"—")}</div><div><b>Address</b>${esc(customerAddress||"—")}</div></div></div>
-  <div class="box"><h4>Item Details</h4><table><thead><tr><th>Product</th><th>Qty</th><th>MRP</th><th>Discount</th><th>Amount</th></tr></thead><tbody>${s.items.map(x=>`<tr><td><b>${esc(x.name)}</b>${x.barcode?`<br><span class="small">Barcode: ${esc(x.barcode)}</span>`:""}</td><td>${x.qty}</td><td>${money(x.mrp||0)}</td><td>${money(discountAmount(x))}</td><td><b>${money(itemNetAmount(x))}</b></td></tr>`).join("")}</tbody></table></div>
-  ${s.exchangeDifference!==undefined?`<div class="exchange"><b>Exchange Difference:</b> ${money(Math.abs(Number(s.exchangeDifference||0)))} — ${Number(s.exchangeDifference||0)>0?"Additional amount payable":"Customer credit"}</div>`:""}
-  <div class="bottom"><div class="payment"><div class="sectiontitle">Payment Details</div><div class="row"><span>Cash</span><b>${money(s.cash||0)}</b></div><div class="row"><span>UPI</span><b>${money(s.upi||0)}</b></div><div class="row"><span>Card</span><b>${money(s.card||0)}</b></div><div class="row grand"><span>Total Paid</span><b>${money(s.paid)}</b></div></div><div class="totals"><div class="row"><span>Subtotal</span><b>${money(subtotal)}</b></div><div class="row"><span>Discount</span><b>${money(totalDiscount)}</b></div><div class="row grand"><span>Grand Total</span><b>${money(s.total)}</b></div><div class="balance">${bal>0?"BALANCE DUE":"PAID IN FULL"}: ${money(Math.abs(bal))}</div></div><div class="qrbox"><img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAPoAAAD6AQMAAACyIsh+AAAABlBMVEX///8AAABVwtN+AAAACXBIWXMAAA7EAAAOxAGVKw4bAAABwElEQVRoge2Zu5HDMAxEoVGgUCWoFJVml6ZSVAJDBRrhsFiQ/tzdODeIxEPyKdnB3yKf7KZuJY565+/EaztmAfxmLtMhwyWKDzYeg+9ABVbVfS4ynUNo50oeo+qVEJj0lEHxturegf8BPAG46WYXJSFQI2vEhREB/A695EDkagMuU1LvBriDvSfzLweezQGEVpG/LTPgSu6zapNutZqlx3S6smmAsPnwmiVGrNviDnYOlzw8Kj2A3LzbDYr7VZUt6Ab9A+lABaDcLu5zl+gj9MYzQi8HgDMNF4y9nQ+DMld3wAFzKZy87TEXsmK/0qMiZSUB0A0isiatLmap2zKSeDdIl+tAAD4vqKegyN5W1cYYJ5IAIQySDlOvhRrHz3ruQK1ZYg5lxV2jLdpcSVgt7ikARpYS8EVNONj4EnodYHEXbLQie8MA+HsHGoDVDVzsbKEXBa0qmQKoxo0WlMJ7iW7waTDPDtwoGor7oM18zuKXWQDXao4xioP54kJ5Srp3oAErd8X8c4Hjg9e0x7yZD6AtptNUx80OvAGcN2NBgba5dkVZAEYWd+aRnLkr7sAL0HJ1u9gW66I9B0kHGvDJfgDHd+PmghVpCAAAAABJRU5ErkJggg==" alt="Digital Payment QR"><div class="qrnote">Scan for Digital Payment</div></div></div>
-  <div class="footer"><div><div class="thanks">Thank you for shopping with ROLEX TIMES</div><div>${esc(settings.address||"Unity Complex, Iritty")}</div><div class="contactline">Shop Mobile: 9747504278 &nbsp; | &nbsp; Shop Phone: 04902085810</div></div><div class="sign">Authorized Signature ____________________</div></div>
-</div></body></html>`);
-  w.document.close();
-  w.onload=()=>setTimeout(()=>{try{const b=w.document.querySelector(".bill");if(b){const h=b.scrollHeight*25.4/96;const scale=Math.min(1,142/Math.max(h,1));if(scale<1){b.style.zoom=String(scale);b.style.width=(204/scale)+"mm";}}}catch(e){}w.print();},300);
+<div class="bill"><div class="caption">${esc(saleLabel)}</div><div class="frame">
+<div class="head"><img class="logo" src="${LOGO}"><div class="brand"><h1>ROLEX TIMES</h1><div class="address">${esc(settings.address||"ROLEX TIMES UNITY COMPLEX IRITTY 670703")}</div><div class="contact">Mobile: 9747504278, 04902085810</div>${settings.gstin?`<div class="gst"><b>GSTIN:</b> ${esc(settings.gstin)}</div>`:""}</div></div>
+<div class="meta"><div class="billto"><b>BILL TO</b><strong>${esc(s.customer||"Walk-in Customer")}</strong>${s.mobile?`Mobile: ${esc(s.mobile)}`:""}${customerAddress?`<br>${esc(customerAddress)}`:""}</div><div class="invmeta"><div><b>Invoice Number</b>${esc(s.bill)}</div><div><b>Invoice Date</b>${esc(s.dateDisplay||s.date||"")}</div></div></div>
+<table><thead><tr><th>ITEMS</th><th>QUANTITY</th><th>RATE</th><th>DISCOUNT</th><th>AMOUNT</th></tr></thead><tbody>${(s.items||[]).map(x=>`<tr><td><span class="itemname">${esc(x.name)}</span>${x.barcode?`<br><small>Barcode: ${esc(x.barcode)}</small>`:""}</td><td>${Number(x.qty||0)}</td><td>${money(x.mrp||0)}</td><td>${money(discountAmount(x))}</td><td><b>${money(itemNetAmount(x))}</b></td></tr>`).join("")}<tr class="subrow"><td colspan="4" style="text-align:right">SUB TOTAL</td><td>${money(subtotal)}</td></tr><tr class="totalrow"><td colspan="4" style="text-align:right">INVOICE TOTAL</td><td>${money(s.total)}</td></tr><tr class="received"><td colspan="4" style="text-align:right">RECEIVED (${esc(s.paymentMode||"CASH")})</td><td>${money(s.paid||0)}</td></tr>${bal>0?`<tr><td colspan="4" style="text-align:right"><b>BALANCE DUE</b></td><td><b>${money(bal)}</b></td></tr>`:""}</tbody></table>
+<div class="footgrid"><div class="terms"><h4>Terms &amp; Conditions</h4>No guarantee for fancy watches<br>Bring original bill, guarantee card and original box for claiming guarantee</div><div><h4>BANK DETAILS</h4><div class="bankline">Account Name: MUHAMMED REYAZ</div><div class="bankline">Account No: 8490020000046</div><div class="bankline">IFSC Code: —</div><div class="bankline">Bank Name: BANK OF BARODA</div><div class="bankline">UPI ID: rolex75590046@barodampay</div></div><div class="qr"><div>Pay by Scanning QR Code</div><img src="${qrImage}" alt="Payment QR"></div><div class="sign">Authorized signatory for<strong>ROLEX TIMES</strong></div></div>
+</div></div></body></html>`);
+  w.document.close(); w.onload=()=>setTimeout(()=>w.print(),350);
 }
 function whatsappSale(id){let s=sales.find(x=>x.id===id);if(!s)return;let p=(s.mobile||"").replace(/\D/g,"");if(p.length===10)p="91"+p;if(p.length<10){alert("Enter a valid customer mobile number for this sale.");return}let msg=`*ROLEX TIMES - SALES BILL*\n\nBill No: ${s.bill}\nCustomer: ${s.customer}\n\n${s.items.map(x=>`${x.name} x ${x.qty} = ${money(itemNetAmount(x))}${discountAmount(x)>0?` (Discount ${money(discountAmount(x))})`:""}`).join("\n")}\n\n*Total: ${money(s.total)}*\nPaid: ${money(s.paid)}\nCash: ${money(s.cash||0)} | UPI: ${money(s.upi||0)} | Card: ${money(s.card||0)}\n*Balance: ${money(Number(s.total)-Number(s.paid))}*\n\nShop: ROLEX TIMES\n${settings.address||"Unity Complex, Iritty"}${settings.phone?"\nPhone: "+settings.phone:""}\n\nThank you.`;window.open("https://wa.me/"+p+"?text="+encodeURIComponent(msg),"_blank")}
 
