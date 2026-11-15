@@ -279,7 +279,7 @@ function saveSettings(){localStorage.setItem("rolex_times_settings",JSON.stringi
 function today(){let d=new Date();return String(d.getDate()).padStart(2,"0")+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+d.getFullYear()}
 function isoToday(){return new Date().toISOString().slice(0,10)}
 function nextNumber(key,prefix){let n=Number(localStorage.getItem(key)||0)+1;localStorage.setItem(key,n);return prefix+String(n).padStart(5,"0")}
-function nextBill(){return nextNumber("rolex_times_bill_no","RT-")}
+function nextBill(){let stored=Number(localStorage.getItem("rolex_times_bill_no")||0);let highest=records.reduce((m,r)=>{const match=String(r.bill||"").match(/^RT-(\\d+)$/i);return match?Math.max(m,Number(match[1])):m},0);let n=Math.max(stored,highest)+1;localStorage.setItem("rolex_times_bill_no",String(n));return "RT-"+String(n).padStart(5,"0")}
 function nextSale(){return nextNumber("rolex_times_sale_no","SALE-")}
 function nextPurchase(){return nextNumber("rolex_times_purchase_no","PUR-")}
 function nextBarcode(){return "RTB"+String(Number(localStorage.getItem("rolex_times_barcode_no")||0)+1).padStart(9,"0")}
@@ -364,7 +364,7 @@ function renumberRepairWatches(){document.querySelectorAll("#additionalWatches .
 function getRepairExtraWatches(){return [...document.querySelectorAll("#additionalWatches .repair-extra-watch")].map(row=>({make:row.querySelector(".extra-make").value.trim(),model:row.querySelector(".extra-model").value.trim(),serial:row.querySelector(".extra-serial").value.trim(),type:row.querySelector(".extra-type").value.trim(),details:row.querySelector(".extra-details").value.trim(),status:row.querySelector(".extra-status")?.value||"Received"})).filter(w=>w.make||w.model||w.serial||w.type||w.details)}
 function openForm(r=null){editId=r?.id||null;$("formTitle").textContent=r?"Edit Repair":"New Repair";$("bill").value=r?.bill||nextBill();["received","customer","mobile","custAddress","make","model","serial","type","due","details","charge","notes","repairedBy"].forEach(k=>$(k).value=r?.[k]??"");$("underWarranty").value=r?.underWarranty||"No";$("warrantyDate").value=r?.warrantyDate||"";toggleWarrantyDate();$("received").value=r?.received||today();$("charge").value=r?.charge??0;const legacy=(r&&r.cash===undefined&&r.upi===undefined&&r.card===undefined)?Number(r.paid||0):0;$("repairCash").value=r?.cash??legacy;$("repairUpi").value=r?.upi??0;$("repairCard").value=r?.card??0;updateRepairPaid();$("status").value=r?.status||"Received";$("watchStatus").value=r?.watchItems?.[0]?.status||r?.status||"Received";$("additionalWatches").innerHTML="";(r?.watchItems||[]).slice(1).forEach(w=>addRepairWatch(w));$("modal").classList.add("show");bindRepairCustomerLookup()}
 function closeForm(){$("modal").classList.remove("show")}
-function saveRecord(){const cash=Number($("repairCash").value||0),upi=Number($("repairUpi").value||0),card=Number($("repairCard").value||0),paid=cash+upi+card;if([cash,upi,card].some(v=>v<0)){alert("Payment amounts cannot be negative.");return}const previous=editId?records.find(x=>x.id===editId):null;let r={id:editId||Date.now().toString(),bill:$("bill").value,received:$("received").value.trim(),customer:$("customer").value.trim(),mobile:$("mobile").value.trim(),custAddress:$("custAddress").value.trim(),make:$("make").value.trim(),model:$("model").value.trim(),serial:$("serial").value.trim(),type:$("type").value.trim(),due:$("due").value.trim(),underWarranty:$("underWarranty").value,warrantyDate:$("underWarranty").value==="Yes"?$("warrantyDate").value:"",details:$("details").value.trim(),charge:Number($("charge").value||0),paid,cash,upi,card,paymentMode:[cash>0?"Cash":"",upi>0?"UPI":"",card>0?"Card":""].filter(Boolean).join(" + ")||"Credit",status:$("status").value,repairedBy:$("repairedBy").value.trim(),notes:$("notes").value.trim(),watchItems:[{make:$("make").value.trim(),model:$("model").value.trim(),serial:$("serial").value.trim(),type:$("type").value.trim(),details:$("details").value.trim(),status:$("watchStatus").value},...getRepairExtraWatches()]};if(!r.bill.trim()){alert("Bill Number is required.");return}if(records.some(x=>x.id!==r.id&&String(x.bill).trim().toLowerCase()===r.bill.trim().toLowerCase())){alert("This Bill Number is already used. Please enter a unique Bill Number.");return}if(!r.customer||!r.details){alert("Customer Name and Repair Details are required.");return}if(editId)records=records.map(x=>x.id===editId?r:x);else records.push(r);upsertCustomerFromEntry(r);syncCustomerDatabaseFromHistory();saveDB();closeForm();showPage("dashboard");if(previous&&previous.status!==r.status&&(r.status==="Ready"||r.status==="Delivered")){whatsappRepairStatus(r.id,r.status)}}
+function saveRecord(){const cash=Number($("repairCash").value||0),upi=Number($("repairUpi").value||0),card=Number($("repairCard").value||0),paid=cash+upi+card;if([cash,upi,card].some(v=>v<0)){alert("Payment amounts cannot be negative.");return}const previous=editId?records.find(x=>x.id===editId):null;let r={id:editId||Date.now().toString(),bill:$("bill").value,received:$("received").value.trim(),customer:$("customer").value.trim(),mobile:$("mobile").value.trim(),custAddress:$("custAddress").value.trim(),make:$("make").value.trim(),model:$("model").value.trim(),serial:$("serial").value.trim(),type:$("type").value.trim(),due:$("due").value.trim(),underWarranty:$("underWarranty").value,warrantyDate:$("underWarranty").value==="Yes"?$("warrantyDate").value:"",details:$("details").value.trim(),charge:Number($("charge").value||0),paid,cash,upi,card,paymentMode:[cash>0?"Cash":"",upi>0?"UPI":"",card>0?"Card":""].filter(Boolean).join(" + ")||"Credit",status:$("status").value,repairedBy:$("repairedBy").value.trim(),notes:$("notes").value.trim(),watchItems:[{make:$("make").value.trim(),model:$("model").value.trim(),serial:$("serial").value.trim(),type:$("type").value.trim(),details:$("details").value.trim(),status:$("watchStatus").value},...getRepairExtraWatches()]};if(!r.bill.trim()){alert("Bill Number is required.");return}if(!r.customer||!r.details){alert("Customer Name and Repair Details are required.");return}if(editId)records=records.map(x=>x.id===editId?r:x);else records.push(r);upsertCustomerFromEntry(r);syncCustomerDatabaseFromHistory();saveDB();closeForm();showPage("dashboard");if(previous&&previous.status!==r.status&&(r.status==="Ready"||r.status==="Delivered")){whatsappRepairStatus(r.id,r.status)}}
 function whatsappRepairStatus(id,status){const r=records.find(x=>x.id===id);if(!r)return;let p=(r.mobile||"").replace(/\D/g,"");if(p.length===10)p="91"+p;if(p.length<10){alert("Repair saved, but enter a valid customer mobile number to send the WhatsApp status message.");return}const message=status==="Ready"?`Hello ${r.customer||"Customer"}, your watch is ready to deliver.
 
 ROLEX TIMES
@@ -497,6 +497,28 @@ function importStockCSV(input){
 }
 function renderStock(){let q=($("stockSearch")?.value||"").toLowerCase();let arr=products.filter(p=>(p.barcode+" "+p.name+" "+p.brand+" "+p.model+" "+p.serial).toLowerCase().includes(q));$("page").innerHTML=`<div class="panel"><div class="panelhead"><h3>Stock / Products</h3><div class="toolbar"><input id="stockSearch" class="search" placeholder="Search barcode, product, model..." value="${esc(q)}"><button class="btn" onclick="openProductForm()">+ Add Product</button><button class="btn gray" onclick="downloadStockCSVTemplate()">⬇ CSV Template</button><button class="btn gray" onclick="document.getElementById('stockCSVFile').click()">⬆ Upload CSV</button><input id="stockCSVFile" type="file" accept=".csv,text/csv" style="display:none" onchange="importStockCSV(this)"><button class="btn gray" onclick="printAllBarcodes()">🖨 Print All Barcodes</button></div></div><p class="muted mini">USB barcode scanners work like a keyboard. Scan into the Sales barcode box and press Enter.</p><div class="tablewrap"><table><thead><tr><th>Barcode</th><th>Product</th><th>Purchase</th><th>MRP</th><th>Sale Price</th><th>Stock</th><th>Value</th><th>Action</th></tr></thead><tbody>${arr.map(p=>`<tr><td><b>${esc(p.barcode)}</b><div style="width:130px">${code128SVG(p.barcode)}</div></td><td>${esc(p.name)}<br><small>${esc(p.brand)} ${esc(p.model)} ${p.serial?"• "+esc(p.serial):""}</small></td><td>${money(p.buy)}</td><td>${money(p.mrp||0)}</td><td>${money(p.sell)}</td><td class="${Number(p.stock)<=Number(p.min)?'stocklow':'stockok'}">${p.stock}</td><td>${money(Number(p.stock)*Number(p.buy))}</td><td class="item-actions"><button class="btn gray small" onclick='openProductForm(${JSON.stringify(p).replace(/'/g,"&#39;")})'>Edit</button><button class="btn small" onclick="printProductLabel('${p.id}')">Label</button><button class="btn red small" onclick="deleteProduct('${p.id}')">🗑 Delete</button></td></tr>`).join("")}</tbody></table></div></div>`;$("stockSearch").oninput=renderStock}
 function findProduct(v){v=String(v||"").trim().toLowerCase();return products.find(p=>String(p.barcode).toLowerCase()===v)||products.find(p=>(p.name+" "+p.brand+" "+p.model).toLowerCase().includes(v))}
+
+// Barcode scanner support for USB/Bluetooth keyboard-wedge scanners.
+// Accepts scanners that send Enter and scanners that stop after the barcode.
+const scannerTimers={};
+function bindBarcodeScanner(inputId, addFunctionName){
+  const el=$(inputId); if(!el||el.dataset.scannerBound==="1")return;
+  el.dataset.scannerBound="1";
+  const process=()=>{
+    const code=String(el.value||"").trim();
+    if(!code||!findProduct(code))return;
+    clearTimeout(scannerTimers[inputId]);
+    window[addFunctionName]();
+  };
+  el.addEventListener("keydown",e=>{
+    if(e.key==="Enter"){e.preventDefault();clearTimeout(scannerTimers[inputId]);process();}
+  });
+  el.addEventListener("input",()=>{
+    clearTimeout(scannerTimers[inputId]);
+    scannerTimers[inputId]=setTimeout(process,280);
+  });
+}
+
 function printCurrentProductBarcode(){let id=editProductId;if(!id){let temp={name:$("pName")?.value||"Product",barcode:$("pBarcode")?.value.trim()};if(!temp.barcode){alert("Enter or generate a barcode first.");return}printBarcodeLabels([temp]);return}printProductLabel(id)}
 function printBarcodeLabels(items){let w=window.open("","_blank","width=700,height=900");if(!w){alert("Please allow pop-ups for barcode printing.");return}w.document.write(`<html><head><meta charset="utf-8"><title>ROLEX TIMES Barcode Labels</title><style>@page{size:A4;margin:8mm}body{font-family:Arial}.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:6mm}.label{border:.3mm solid #bbb;padding:4mm;text-align:center;min-height:32mm;break-inside:avoid}.name{font-weight:bold;font-size:10pt;margin-bottom:2mm}.price{font-size:9pt;margin-top:1mm}.bar svg{width:100%;height:15mm}</style></head><body><div class="grid">${items.map(p=>`<div class="label"><div class="name">${esc(p.name||"Product")}</div><div class="bar">${code128SVG(p.barcode)}</div><div>${esc(p.barcode)}</div>${p.sell?`<div class="price">${money(p.sell)}</div>`:""}</div>`).join("")}</div></body></html>`);w.document.close();w.onload=()=>setTimeout(()=>w.print(),300)}
 function printProductLabel(id){let p=products.find(x=>x.id===id);if(!p)return;let w=window.open("","_blank","width=500,height=400");if(!w)return;w.document.write(`<html><head><title>${esc(p.name)}</title><style>@page{size:60mm 35mm;margin:0}body{margin:0;font-family:Arial;text-align:center}.label{width:60mm;height:35mm;padding:3mm;box-sizing:border-box}.name{font-weight:bold;font-size:10pt;margin-bottom:1mm}.price{font-size:9pt}</style></head><body><div class="label"><div class="name">${esc(p.name)}</div>${code128SVG(p.barcode)}<div>${esc(p.barcode)} ${p.mrp?"• MRP "+money(p.mrp):""}${p.sell?" • "+money(p.sell):""}</div></div></body></html>`);w.document.close();w.onload=()=>setTimeout(()=>w.print(),200)}
@@ -644,7 +666,7 @@ function renderPurchaseEntry(editIdArg=null){
     <div class="full" id="purchaseCartArea"></div>
   </div><div class="formactions"><button type="button" class="btn gray" onclick="showPage('purchases')">Cancel</button><button type="button" class="btn gold" onclick="savePurchase()">${existing?'Update Purchase':'Save Purchase'}</button></div></div>`;
   purchaseCart=existing?(existing.items||[]).map(x=>({...x,qty:Number(x.qty||1),buy:Number(x.buy||0),mrp:Number(x.mrp||0),manual:false})):[];
-  populatePurchaseProductSelect(); renderPurchaseCart(); setTimeout(()=>$('puBarcode')?.focus(),50);
+  populatePurchaseProductSelect(); renderPurchaseCart(); bindBarcodeScanner('puBarcode','addPurchaseItemByBarcode'); setTimeout(()=>$('puBarcode')?.focus(),100);
 }
 function openPurchaseForm(){openPurchasePage()}
 function closePurchaseForm(){showPage('purchases')}
@@ -901,6 +923,8 @@ function renderSales(){
   populateProductSelect('saleProductSelect');
   renderSaleCart();
   bindSaleCustomerLookup();
+  bindBarcodeScanner('saleBarcode','addSaleItemByBarcode');
+  setTimeout(()=>$('saleBarcode')?.focus(),100);
 }
 </script>
 
